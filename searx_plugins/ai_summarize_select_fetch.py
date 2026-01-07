@@ -110,13 +110,11 @@ class ContentAnalyzer(HTMLParser):
     def handle_endtag(self, tag):
         # Remove from stack if it matches (handle malformed HTML gracefully)
         if self.current_tag_stack:
-            # Try to find matching tag in stack (handle out-of-order closing)
-            try:
-                idx = len(self.current_tag_stack) - 1 - list(reversed(self.current_tag_stack)).index(tag)
-                self.current_tag_stack.pop(idx)
-            except ValueError:
-                # Tag not in stack - malformed HTML, continue gracefully
-                pass
+            # Efficiently find matching tag in stack from end (handle out-of-order closing)
+            for i in range(len(self.current_tag_stack) - 1, -1, -1):
+                if self.current_tag_stack[i] == tag:
+                    self.current_tag_stack.pop(i)
+                    break
         
         # Exit excluded section
         if self.in_excluded:
@@ -165,7 +163,8 @@ def _calculate_content_density(text: str) -> float:
     sentence_score = min(sentence_endings / max(word_count / WORDS_PER_SENTENCE, 1), 1.0)
     
     # Alphanumeric ratio (prefer text over symbols/noise)
-    alnum_chars = sum(1 for c in text if c.isalnum() or c.isspace())
+    # Count alphanumeric and space characters efficiently
+    alnum_chars = sum(c.isalnum() or c.isspace() for c in text)
     alnum_ratio = alnum_chars / length if length > 0 else 0
     
     # Combined score
