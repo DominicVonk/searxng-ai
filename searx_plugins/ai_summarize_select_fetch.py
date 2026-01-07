@@ -108,8 +108,15 @@ class ContentAnalyzer(HTMLParser):
                 return
     
     def handle_endtag(self, tag):
-        if self.current_tag_stack and self.current_tag_stack[-1] == tag:
-            self.current_tag_stack.pop()
+        # Remove from stack if it matches (handle malformed HTML gracefully)
+        if self.current_tag_stack:
+            # Try to find matching tag in stack (handle out-of-order closing)
+            try:
+                idx = len(self.current_tag_stack) - 1 - list(reversed(self.current_tag_stack)).index(tag)
+                self.current_tag_stack.pop(idx)
+            except ValueError:
+                # Tag not in stack - malformed HTML, continue gracefully
+                pass
         
         # Exit excluded section
         if self.in_excluded:
@@ -142,16 +149,20 @@ def _calculate_content_density(text: str) -> float:
     length_score = min(length / 5000, 1.0)  # Normalize to max of 5000 chars
     
     # Word density (prefer more words per character - indicates real content)
+    # Multiplier of 10 normalizes typical English text (avg ~5 chars/word) to 0.5 range
+    WORD_DENSITY_NORMALIZER = 10
     words = text.split()
     word_count = len(words)
     if length == 0:
         word_density = 0
     else:
-        word_density = min((word_count / length) * 10, 1.0)
+        word_density = min((word_count / length) * WORD_DENSITY_NORMALIZER, 1.0)
     
     # Sentence structure score (real content has proper sentences)
+    # Assume well-written content has ~15 words per sentence on average
+    WORDS_PER_SENTENCE = 15
     sentence_endings = text.count('.') + text.count('!') + text.count('?')
-    sentence_score = min(sentence_endings / max(word_count / 15, 1), 1.0)
+    sentence_score = min(sentence_endings / max(word_count / WORDS_PER_SENTENCE, 1), 1.0)
     
     # Alphanumeric ratio (prefer text over symbols/noise)
     alnum_chars = sum(1 for c in text if c.isalnum() or c.isspace())
@@ -261,8 +272,9 @@ def _extract_enhanced(html: str, url: str, query: str) -> Optional[str]:
                 result = '\n\n'.join(extracted)
                 if len(result) > 100:  # Minimum viable content
                     return result
-    except Exception:
-        pass  # Fall through to trafilatura
+    except (ValueError, TypeError) as e:
+        # Expected errors from HTML parsing - fall through to trafilatura
+        pass
     
     # Strategy 2: Fallback to trafilatura with enhanced config
     try:
@@ -312,7 +324,8 @@ def _extract_enhanced(html: str, url: str, query: str) -> Optional[str]:
         if text and len(text.strip()) > 100:
             return text[:EXTRACT_MAX_CHARS]
             
-    except Exception:
+    except (ValueError, TypeError) as e:
+        # Expected errors from trafilatura parsing
         pass
     
     return None

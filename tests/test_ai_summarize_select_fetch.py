@@ -159,7 +159,9 @@ class TestContentDensity(unittest.TestCase):
         """Test density of low-quality text (symbols, noise)."""
         text = "!@#$%^&*()_+-=[]{}|;':\"<>?,./`~"
         density = _calculate_content_density(text)
-        self.assertLess(density, 0.4)  # Adjusted threshold for symbol-heavy text
+        # Threshold of 0.4 accounts for the alphanumeric ratio component
+        # which still scores ~0.33 even for pure symbols due to sentence normalization
+        self.assertLess(density, 0.4)
     
     def test_mixed_content(self):
         """Test density of mixed quality content."""
