@@ -1,12 +1,60 @@
+# see https://docs.searxng.org/admin/settings/settings.html#settings-use-default-settings
 use_default_settings: true
-
 server:
-  bind_address: 0.0.0.0
-  port: 8080
-  secret_key: "CHANGE_ME_LONG_RANDOM"
-
-ui:
-  default_locale: "en"
+  limiter: false
+  image_proxy: true
+outgoing:
+  useragent_suffix: "4x80gcma@privateforward.ing"
+search:
+  favicon_resolver: "duckduckgo"
+  autocomplete: "google"
+  formats:
+    - html
+    - csv
+    - json
+    - rss
+engines:
+  - name: google
+    preferences: "LD=nl"
+    engine: json_engine
+    disabled: false
+    base_url: "http://whoogle:5000"
+    search_url: "http://whoogle:5000/search?q={query}&page={pageno}&hl={lang}{time_range}{safe_search}&format=json"
+    
+    method: GET
+    results_query: "results"
+    title_query: "title"
+    url_query: "href"
+    content_query: "content"
+    enable_http: true
+   
+    paging: True
+    page_size: 10
+    first_page_num: 1
+    
+    
+   
+    safe_search_support: true
+    safe_search_map:
+      0: ""                                    
+      1: "&filter=moderate"                    
+      2: "&safe=active"                       
+    
+    
+    time_range_support: true
+    time_range_url: "&tbs=qdr:{time_range_val}"
+    time_range_map:
+      day: "d"    
+      week: "w"    
+      month: "m"    
+      year: "y" 
+    
+    lang_all: nl
+   
+    weight: 3
+    timeout: 12
+    no_result_for_http_status: [404, 429, 503] 
+    categories: [general, news, images, videos, it]
 
 # Enable plugins (module paths match where we copied them)
 plugins:
@@ -15,7 +63,6 @@ plugins:
     active: true
   searx.plugins.ai_quick_answer.SXNGPlugin:
     active: true
-  
   # Result enhancement plugins (no API key needed)
   searx.plugins.result_enhancer.SXNGPlugin:
     active: true

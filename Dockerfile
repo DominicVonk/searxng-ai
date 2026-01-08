@@ -13,5 +13,5 @@ COPY searx_plugins/smart_suggestions.py /usr/local/searxng/searx/plugins/smart_s
 
 # Copy settings (Coolify can also mount instead; this is simplest)
 COPY settings.yml /etc/searxng/settings.yml
-
+COPY favicons.toml /etc/searxng/favicons.toml
 USER searxng

@@ -1,0 +1,86 @@
+services:
+  searxng:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      - SERVICE_URL_SEARXNG_8080
+      - 'INSTANCE_NAME=${INSTANCE_NAME:-coolify}'
+      - 'BASE_URL=${SERVICE_URL_SEARXNG_8080}'
+      - 'SEARXNG_URL=${SERVICE_URL_SEARXNG_8080}'
+      - 'SEARXNG_BIND_ADDRESS=${SEARXNG_BIND_ADDRESS:-0.0.0.0}'
+      - 'SEARXNG_SECRET=${SERVICE_PASSWORD_SEARXNGSECRET}'
+      - 'SEARXNG_REDIS_URL=redis://redis:6379/0'
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - '-q'
+        - '--spider'
+        - 'http://127.0.0.1:8080/healthz'
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    volumes:
+      -
+        type: bind
+        source: ./settings.yml
+        target: /etc/searxng/settings.yml
+      -
+        type: bind
+        source: ./limiter.toml
+        target: /etc/searxng/limiter.toml
+      -
+        type: bind
+        source: ./favicon.toml
+        target: /etc/searxng/favicons.toml
+      -
+        type: bind
+        source: ./whoogle.py
+        target: /usr/local/searxng/searx/engines/whoogle.py
+      -
+        type: bind
+        source: ./custom.css
+        target: /usr/local/searxng/searx/static/custom.css
+    labels:
+      - traefik.http.middlewares.searxng-headers.headers.customrequestheaders.X-Forwarded-Proto=https
+      - traefik.http.middlewares.searxng-headers.headers.customrequestheaders.X-Forwarded-Host=searxng.c.dovo.space
+      - traefik.http.middlewares.searxng-headers.headers.customrequestheaders.X-Forwarded-Port=443
+      - 'traefik.http.routers.https-0-yssscgsskgoowgkswo8kso4s-searxng.middlewares=gzip,searxng-headers'
+  redis:
+    image: 'redis:7'
+    restart: always
+    volumes:
+      - 'redis-data:/data'
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 5s
+      retries: 3
+  whoogle:
+    image: 'benbusby/whoogle-search:latest'
+    environment:
+      - SERVICE_URL_WHOOGLE_5000
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - '-f'
+        - 'http://127.0.0.1:5000'
+      interval: 2s
+      timeout: 10s
+      retries: 15
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    labels:
+      - 'traefik.http.middlewares.real-ip.headers.customrequestheaders.X-Real-IP={remote.ip}'
