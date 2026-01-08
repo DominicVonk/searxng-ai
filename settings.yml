@@ -8,7 +8,16 @@ server:
 ui:
   default_locale: "en"
 
-# Enable your plugin (module path matches where we copied it)
+# Enable plugins (module paths match where we copied them)
 plugins:
+  # AI-powered plugins
   searx.plugins.ai_summarize_select_fetch.SXNGPlugin:
+    active: true
+  searx.plugins.ai_quick_answer.SXNGPlugin:
+    active: true
+  
+  # Result enhancement plugins (no API key needed)
+  searx.plugins.result_enhancer.SXNGPlugin:
+    active: true
+  searx.plugins.smart_suggestions.SXNGPlugin:
     active: true
