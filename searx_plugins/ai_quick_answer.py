@@ -112,6 +112,6 @@ class SXNGPlugin(Plugin):
                     content=answer_text
                 )
             )
-        except Exception:
-            # Fail gracefully
+        except (ConnectionError, TimeoutError, ValueError, KeyError) as e:
+            # Expected errors - fail gracefully without breaking search
             pass
