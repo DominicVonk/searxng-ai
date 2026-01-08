@@ -3,7 +3,7 @@ FROM searxng/searxng:latest
 USER root
 
 # Needed for fetching + extraction
-RUN pip install --no-cache-dir httpx trafilatura
+RUN /usr/local/searxng/.venv/bin/python -m pip install --no-cache-dir httpx trafilatura
 
 # Copy all plugins into searx plugin path inside the image
 COPY searx_plugins/ai_summarize_select_fetch.py /usr/local/searxng/searx/plugins/ai_summarize_select_fetch.py
