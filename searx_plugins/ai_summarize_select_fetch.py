@@ -2,7 +2,9 @@ import os
 import re
 import json
 import asyncio
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
+from collections import Counter
+from html.parser import HTMLParser
 
 import httpx
 import trafilatura
@@ -34,6 +36,298 @@ SELECT_TIMEOUT = float(os.getenv("SEARXNG_AI_SELECT_TIMEOUT", "7.0"))
 SUMMARIZE_TIMEOUT = float(os.getenv("SEARXNG_AI_SUMMARIZE_TIMEOUT", "12.0"))
 
 UA = os.getenv("SEARXNG_AI_UA", "Mozilla/5.0 (compatible; SearXNG-AI/1.0)")
+
+
+# -------------------------
+# CONTENT EXTRACTION ENHANCEMENT
+# -------------------------
+
+class ContentAnalyzer(HTMLParser):
+    """Advanced HTML analyzer for content density and relevance scoring."""
+    
+    # Tags to exclude (ads, navigation, footers, etc.)
+    EXCLUDED_TAGS = {
+        'nav', 'header', 'footer', 'aside', 'script', 'style', 'iframe',
+        'noscript', 'form', 'button', 'input', 'select', 'textarea'
+    }
+    
+    # Low-value class/id patterns (ads, navigation, social, etc.)
+    EXCLUDED_PATTERNS = [
+        r'ad[sv]?[-_]',
+        r'banner',
+        r'promo',
+        r'sponsor',
+        r'social',
+        r'share',
+        r'comment',
+        r'footer',
+        r'header',
+        r'nav',
+        r'menu',
+        r'sidebar',
+        r'widget',
+        r'popup',
+        r'modal',
+        r'cookie',
+        r'subscribe',
+        r'newsletter',
+    ]
+    
+    # High-value tags for main content
+    CONTENT_TAGS = {'article', 'main', 'section', 'div', 'p'}
+    
+    def __init__(self):
+        super().__init__()
+        self.content_blocks = []
+        self.current_block = []
+        self.current_tag_stack = []
+        self.in_excluded = False
+        self.excluded_depth = 0
+        
+    def handle_starttag(self, tag, attrs):
+        self.current_tag_stack.append(tag)
+        
+        # If already in excluded section, just increase depth for all tags
+        if self.in_excluded:
+            self.excluded_depth += 1
+            return
+        
+        # Check if we're entering an excluded section
+        if tag in self.EXCLUDED_TAGS:
+            self.in_excluded = True
+            self.excluded_depth = 1
+            return
+            
+        # Check class/id patterns for excluded content
+        attrs_dict = dict(attrs)
+        for attr_name in ['class', 'id']:
+            attr_value = attrs_dict.get(attr_name, '').lower()
+            if any(re.search(pattern, attr_value) for pattern in self.EXCLUDED_PATTERNS):
+                self.in_excluded = True
+                self.excluded_depth = 1
+                return
+    
+    def handle_endtag(self, tag):
+        # Remove from stack if it matches (handle malformed HTML gracefully)
+        if self.current_tag_stack:
+            # Efficiently find matching tag in stack from end (handle out-of-order closing)
+            for i in range(len(self.current_tag_stack) - 1, -1, -1):
+                if self.current_tag_stack[i] == tag:
+                    self.current_tag_stack.pop(i)
+                    break
+        
+        # Exit excluded section
+        if self.in_excluded:
+            if self.excluded_depth > 0:
+                self.excluded_depth -= 1
+            if self.excluded_depth == 0:
+                self.in_excluded = False
+                
+        # Save content block when exiting content tags
+        if tag in self.CONTENT_TAGS and self.current_block and not self.in_excluded:
+            block_text = ' '.join(self.current_block).strip()
+            if len(block_text) > 50:  # Minimum block length
+                self.content_blocks.append(block_text)
+            self.current_block = []
+    
+    def handle_data(self, data):
+        if not self.in_excluded:
+            text = data.strip()
+            if text:
+                self.current_block.append(text)
+
+
+def _calculate_content_density(text: str) -> float:
+    """Calculate content density score based on various quality metrics."""
+    if not text:
+        return 0.0
+    
+    # Length score (prefer substantial content)
+    length = len(text)
+    length_score = min(length / 5000, 1.0)  # Normalize to max of 5000 chars
+    
+    # Word density (prefer more words per character - indicates real content)
+    # Multiplier of 10 normalizes typical English text (avg ~5 chars/word) to 0.5 range
+    WORD_DENSITY_NORMALIZER = 10
+    words = text.split()
+    word_count = len(words)
+    if length == 0:
+        word_density = 0
+    else:
+        word_density = min((word_count / length) * WORD_DENSITY_NORMALIZER, 1.0)
+    
+    # Sentence structure score (real content has proper sentences)
+    # Assume well-written content has ~15 words per sentence on average
+    WORDS_PER_SENTENCE = 15
+    sentence_endings = text.count('.') + text.count('!') + text.count('?')
+    sentence_score = min(sentence_endings / max(word_count / WORDS_PER_SENTENCE, 1), 1.0)
+    
+    # Alphanumeric ratio (prefer text over symbols/noise)
+    # Count alphanumeric and space characters efficiently
+    alnum_chars = sum(c.isalnum() or c.isspace() for c in text)
+    alnum_ratio = alnum_chars / length if length > 0 else 0
+    
+    # Combined score
+    density = (
+        length_score * 0.3 +
+        word_density * 0.25 +
+        sentence_score * 0.25 +
+        alnum_ratio * 0.2
+    )
+    
+    return density
+
+
+def _calculate_relevance_score(text: str, query: str) -> float:
+    """Calculate relevance score using NLP-inspired techniques."""
+    if not text or not query:
+        return 0.0
+    
+    text_lower = text.lower()
+    query_lower = query.lower()
+    
+    # Extract query terms (simple tokenization)
+    query_terms = set(re.findall(r'\b\w+\b', query_lower))
+    query_terms = {t for t in query_terms if len(t) > 2}  # Filter short words
+    
+    if not query_terms:
+        return 0.0
+    
+    # Count term frequencies in text
+    text_words = re.findall(r'\b\w+\b', text_lower)
+    text_word_freq = Counter(text_words)
+    
+    # Term frequency score
+    term_matches = sum(text_word_freq.get(term, 0) for term in query_terms)
+    tf_score = min(term_matches / (len(query_terms) * 5), 1.0)
+    
+    # Exact phrase matching bonus
+    phrase_score = 1.0 if query_lower in text_lower else 0.0
+    
+    # Position score (earlier is better)
+    first_match_pos = len(text)
+    for term in query_terms:
+        pos = text_lower.find(term)
+        if pos != -1 and pos < first_match_pos:
+            first_match_pos = pos
+    
+    position_score = 1.0 - (first_match_pos / len(text)) if len(text) > 0 else 0.0
+    
+    # Combined relevance score
+    relevance = (
+        tf_score * 0.5 +
+        phrase_score * 0.3 +
+        position_score * 0.2
+    )
+    
+    return relevance
+
+
+def _extract_enhanced(html: str, url: str, query: str) -> Optional[str]:
+    """
+    Enhanced content extraction with advanced heuristics.
+    
+    Uses multiple strategies:
+    1. Content density analysis
+    2. Structural filtering (remove ads, nav, footers)
+    3. Relevance scoring against query
+    4. Trafilatura as fallback
+    """
+    if not html:
+        return None
+    
+    # Strategy 1: Parse with custom analyzer
+    try:
+        analyzer = ContentAnalyzer()
+        analyzer.feed(html)
+        
+        if analyzer.content_blocks:
+            # Score each block by density and relevance
+            scored_blocks = []
+            for block in analyzer.content_blocks:
+                density = _calculate_content_density(block)
+                relevance = _calculate_relevance_score(block, query)
+                combined_score = density * 0.4 + relevance * 0.6
+                scored_blocks.append((combined_score, block))
+            
+            # Sort by score and take top blocks
+            scored_blocks.sort(reverse=True, key=lambda x: x[0])
+            
+            # Combine top blocks up to character limit
+            extracted = []
+            total_chars = 0
+            for score, block in scored_blocks:
+                if score < 0.1:  # Minimum quality threshold
+                    break
+                if total_chars + len(block) > EXTRACT_MAX_CHARS:
+                    remaining = EXTRACT_MAX_CHARS - total_chars
+                    if remaining > 200:  # Only add if substantial space left
+                        extracted.append(block[:remaining])
+                    break
+                extracted.append(block)
+                total_chars += len(block)
+            
+            if extracted:
+                result = '\n\n'.join(extracted)
+                if len(result) > 100:  # Minimum viable content
+                    return result
+    except (ValueError, TypeError) as e:
+        # Expected errors from HTML parsing - fall through to trafilatura
+        pass
+    
+    # Strategy 2: Fallback to trafilatura with enhanced config
+    try:
+        text = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=True,  # Tables can contain useful data
+            no_fallback=False,
+            favor_precision=True,  # Prefer quality over quantity
+            favor_recall=False,
+        )
+        
+        if text:
+            # Apply relevance filtering to trafilatura output
+            paragraphs = text.split('\n\n')
+            scored_paragraphs = []
+            
+            for para in paragraphs:
+                if len(para.strip()) < 50:
+                    continue
+                density = _calculate_content_density(para)
+                relevance = _calculate_relevance_score(para, query)
+                combined_score = density * 0.4 + relevance * 0.6
+                scored_paragraphs.append((combined_score, para))
+            
+            if scored_paragraphs:
+                scored_paragraphs.sort(reverse=True, key=lambda x: x[0])
+                
+                # Combine top paragraphs
+                result_parts = []
+                total_chars = 0
+                for score, para in scored_paragraphs:
+                    if score < 0.05:
+                        break
+                    if total_chars + len(para) > EXTRACT_MAX_CHARS:
+                        remaining = EXTRACT_MAX_CHARS - total_chars
+                        if remaining > 200:
+                            result_parts.append(para[:remaining] + "…")
+                        break
+                    result_parts.append(para)
+                    total_chars += len(para)
+                
+                if result_parts:
+                    return '\n\n'.join(result_parts)
+        
+        # Last resort: return raw trafilatura output
+        if text and len(text.strip()) > 100:
+            return text[:EXTRACT_MAX_CHARS]
+            
+    except (ValueError, TypeError) as e:
+        # Expected errors from trafilatura parsing
+        pass
+    
+    return None
 
 
 def _clean(s: str) -> str:
@@ -121,13 +415,27 @@ Search results:
         return []
 
 
-async def fetch_and_extract(client: httpx.AsyncClient, url: str) -> Tuple[str, Optional[str]]:
+async def fetch_and_extract(client: httpx.AsyncClient, url: str, query: str) -> Tuple[str, Optional[str]]:
+    """
+    Fetch and extract content from a URL with enhanced extraction.
+    
+    Args:
+        client: HTTP client
+        url: URL to fetch
+        query: User query for relevance scoring
+        
+    Returns:
+        Tuple of (url, extracted_text or None)
+    """
     try:
         resp = await client.get(url, follow_redirects=True)
         resp.raise_for_status()
 
         raw = resp.content[:FETCH_MAX_BYTES].decode(errors="ignore")
-        text = trafilatura.extract(raw, include_comments=False, include_tables=False)
+        
+        # Use enhanced extraction with query-aware relevance
+        text = _extract_enhanced(raw, url, query)
+        
         if not text:
             return (url, None)
 
@@ -139,11 +447,21 @@ async def fetch_and_extract(client: httpx.AsyncClient, url: str) -> Tuple[str, O
         return (url, None)
 
 
-async def fetch_pages(urls: List[str]) -> List[Tuple[str, str]]:
+async def fetch_pages(urls: List[str], query: str) -> List[Tuple[str, str]]:
+    """
+    Fetch and extract content from multiple URLs in parallel.
+    
+    Args:
+        urls: List of URLs to fetch
+        query: User query for relevance scoring
+        
+    Returns:
+        List of (url, extracted_text) tuples for successful extractions
+    """
     timeout = httpx.Timeout(FETCH_TIMEOUT, connect=FETCH_TIMEOUT)
     headers = {"User-Agent": UA}
     async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
-        out = await asyncio.gather(*[fetch_and_extract(client, u) for u in urls])
+        out = await asyncio.gather(*[fetch_and_extract(client, u, query) for u in urls])
     return [(u, t) for (u, t) in out if t]
 
 
@@ -223,7 +541,7 @@ class SXNGPlugin(Plugin):
 
         # 2) Fetch + extract
         try:
-            extracted = asyncio.run(fetch_pages(urls_to_fetch))
+            extracted = asyncio.run(fetch_pages(urls_to_fetch, clean_q))
             # 3) Summarize + suggested links
             ai_text = llm_summarize(clean_q, extracted, result_container.results)
         except Exception:
